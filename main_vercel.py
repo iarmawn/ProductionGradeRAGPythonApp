@@ -1,18 +1,33 @@
 import logging
-from fastapi import FastAPI
-import inngest
-import inngest.fast_api
-from inngest.experimental import ai
-from dotenv import load_dotenv
-import uuid
 import os
+import uuid
 import datetime
-from data_loader import load_and_chunk_pdf, embed_texts
-from vector_db_cloud import QdrantStorage
-from custom_types import RAQQueryResult, RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
+from fastapi import FastAPI
+from dotenv import load_dotenv
+
+# Lazy imports to reduce initial bundle size
+def get_inngest():
+    import inngest
+    import inngest.fast_api
+    from inngest.experimental import ai
+    return inngest, inngest.fast_api, ai
+
+def get_data_loader():
+    from data_loader import load_and_chunk_pdf, embed_texts
+    return load_and_chunk_pdf, embed_texts
+
+def get_vector_db():
+    from vector_db_cloud import QdrantStorage
+    return QdrantStorage
+
+def get_custom_types():
+    from custom_types import RAQQueryResult, RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
+    return RAQQueryResult, RAGSearchResult, RAGUpsertResult, RAGChunkAndSrc
 
 load_dotenv()
 
+# Initialize with lazy imports
+inngest, inngest_fast_api, ai = get_inngest()
 inngest_client = inngest.Inngest(
     app_id="rag_app",
     logger=logging.getLogger("uvicorn"),
@@ -33,13 +48,22 @@ inngest_client = inngest.Inngest(
   ),
 )
 async def rag_ingest_pdf(ctx: inngest.Context):
-    def _load(ctx: inngest.Context) -> RAGChunkAndSrc:
+    def _load(ctx: inngest.Context):
+        # Lazy import data loader
+        load_and_chunk_pdf, _ = get_data_loader()
+        RAGChunkAndSrc, _, _, _ = get_custom_types()
+        
         pdf_path = ctx.event.data["pdf_path"]
         source_id = ctx.event.data.get("source_id", pdf_path)
         chunks = load_and_chunk_pdf(pdf_path)
         return RAGChunkAndSrc(chunks=chunks, source_id=source_id)
 
-    def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult:
+    def _upsert(chunks_and_src):
+        # Lazy import dependencies
+        _, embed_texts = get_data_loader()
+        QdrantStorage = get_vector_db()
+        _, _, RAGUpsertResult, _ = get_custom_types()
+        
         chunks = chunks_and_src.chunks
         source_id = chunks_and_src.source_id
         vecs = embed_texts(chunks)
@@ -48,8 +72,8 @@ async def rag_ingest_pdf(ctx: inngest.Context):
         QdrantStorage().upsert(ids, vecs, payloads)
         return RAGUpsertResult(ingested=len(chunks))
 
-    chunks_and_src = await ctx.step.run("load-and-chunk", lambda: _load(ctx), output_type=RAGChunkAndSrc)
-    ingested = await ctx.step.run("embed-and-upsert", lambda: _upsert(chunks_and_src), output_type=RAGUpsertResult)
+    chunks_and_src = await ctx.step.run("load-and-chunk", lambda: _load(ctx))
+    ingested = await ctx.step.run("embed-and-upsert", lambda: _upsert(chunks_and_src))
     return ingested.model_dump()
 
 
@@ -58,7 +82,12 @@ async def rag_ingest_pdf(ctx: inngest.Context):
     trigger=inngest.TriggerEvent(event="rag/query_pdf_ai")
 )
 async def rag_query_pdf_ai(ctx: inngest.Context):
-    def _search(question: str, top_k: int = 5) -> RAGSearchResult:
+    def _search(question: str, top_k: int = 5):
+        # Lazy import dependencies
+        _, embed_texts = get_data_loader()
+        QdrantStorage = get_vector_db()
+        _, RAGSearchResult, _, _ = get_custom_types()
+        
         query_vec = embed_texts([question])[0]
         store = QdrantStorage()
         found = store.search(query_vec, top_k)
@@ -67,7 +96,7 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
     question = ctx.event.data["question"]
     top_k = int(ctx.event.data.get("top_k", 5))
 
-    found = await ctx.step.run("embed-and-search", lambda: _search(question, top_k), output_type=RAGSearchResult)
+    found = await ctx.step.run("embed-and-search", lambda: _search(question, top_k))
 
     context_block = "\n\n".join(f"- {c}" for c in found.contexts)
     user_content = (

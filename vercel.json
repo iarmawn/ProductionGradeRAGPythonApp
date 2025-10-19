@@ -2,16 +2,21 @@
   "version": 2,
   "builds": [
     {
-      "src": "main_minimal.py",
+      "src": "main_vercel.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "main_minimal.py"
+      "dest": "main_vercel.py"
     }
   ],
+  "functions": {
+    "main_vercel.py": {
+      "excludeFiles": "{.next,*.cache,node_modules,public,app,__pycache__,*.pyc,*.pyo,*.pyd,.pytest_cache,venv,env,.venv,.env,test*,*test*,docs,examples,samples,*.md,*.txt,*.log,*.tmp,*.temp}/**"
+    }
+  },
   "env": {
     "PYTHONPATH": "."
   }
